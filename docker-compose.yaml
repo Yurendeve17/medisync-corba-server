@@ -19,3 +19,5 @@ services:
       - "2809:2809"
     environment:
       CORBA_PUBLIC_HOST: ${CORBA_PUBLIC_HOST}
+    volumes:
+      - ./src/main/resources:/app/src/main/resources
