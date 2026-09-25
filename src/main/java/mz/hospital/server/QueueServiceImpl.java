@@ -33,6 +33,35 @@ public class QueueServiceImpl extends QueueServicePOA {
     }
 
     @Override
+    public int peekNextPatient() {
+
+        String sql = """
+            SELECT patient_id
+            FROM queue
+            ORDER BY id
+            LIMIT 1
+            """;
+
+        try (Connection connection = DatabaseManager.getConnection();
+             PreparedStatement statement =
+                     connection.prepareStatement(sql);
+             ResultSet result = statement.executeQuery()) {
+
+            if (result.next()) {
+                return result.getInt("patient_id");
+            }
+
+            return 0;
+
+        } catch (Exception e) {
+            throw new RuntimeException(
+                    "Erro ao consultar próximo paciente da fila.",
+                    e
+            );
+        }
+    }
+
+    @Override
     public int getNextPatient() {
 
         String selectSql = """
