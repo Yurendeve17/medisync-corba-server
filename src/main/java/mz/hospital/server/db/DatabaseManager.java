@@ -7,15 +7,18 @@ import java.sql.Statement;
 
 public class DatabaseManager {
 
-    private static final String URL = "jdbc:sqlite:src/main/resources/database.db";
+    private static final String URL =
+            "jdbc:sqlite:src/main/resources/database.db";
 
-    public static Connection getConnection() throws SQLException {
+    public static Connection getConnection()
+            throws SQLException {
+
         return DriverManager.getConnection(URL);
     }
 
     public static void initialize() {
 
-        String sql = """
+        String patientSql = """
                 CREATE TABLE IF NOT EXISTS patients (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     full_name TEXT NOT NULL,
@@ -25,38 +28,57 @@ public class DatabaseManager {
                 )
                 """;
 
-        try (Connection connection = getConnection(); Statement statement = connection.createStatement()) {
+        String appointmentSql = """
+                CREATE TABLE IF NOT EXISTS appointments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    patient_id INTEGER NOT NULL,
+                    doctor TEXT NOT NULL,
+                    appointment_date TEXT NOT NULL,
+                    specialty TEXT NOT NULL,
+                    FOREIGN KEY (patient_id)
+                        REFERENCES patients(id)
+                )
+                """;
 
-            statement.execute(sql);
+        String queueSql = """
+                CREATE TABLE IF NOT EXISTS queue (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    patient_id INTEGER NOT NULL,
+                    added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (patient_id)
+                        REFERENCES patients(id)
+                )
+                """;
 
-            System.out.println("Base de dados inicializada.");
+        String userSql = """
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL UNIQUE,
+                    password_hash TEXT NOT NULL,
+                    full_name TEXT NOT NULL,
+                    role TEXT NOT NULL
+                )
+                """;
 
-            String appointmentSql = """
-                    CREATE TABLE IF NOT EXISTS appointments (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        patient_id INTEGER NOT NULL,
-                        doctor TEXT NOT NULL,
-                        appointment_date TEXT NOT NULL,
-                        specialty TEXT NOT NULL,
-                        FOREIGN KEY (patient_id) REFERENCES patients(id)
-                    )
-                    """;
+        try (Connection connection = getConnection();
+             Statement statement = connection.createStatement()) {
 
+            statement.execute(patientSql);
             statement.execute(appointmentSql);
-
-            String queueSql = """
-                    CREATE TABLE IF NOT EXISTS queue (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        patient_id INTEGER NOT NULL,
-                        added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (patient_id) REFERENCES patients(id)
-                    )
-                    """;
-
             statement.execute(queueSql);
+            statement.execute(userSql);
 
         } catch (SQLException e) {
-            throw new RuntimeException("Erro ao inicializar a base de dados.", e);
+            throw new RuntimeException(
+                    "Erro ao inicializar a base de dados.",
+                    e
+            );
         }
+
+        UserSeeder.seed();
+
+        System.out.println(
+                "Base de dados inicializada."
+        );
     }
 }
