@@ -9,7 +9,6 @@ import org.omg.CosNaming.NameComponent;
 import org.omg.CosNaming.NamingContextExt;
 import org.omg.CosNaming.NamingContextExtHelper;
 
-
 public class Main {
 
     public static void main(String[] args) {
@@ -26,28 +25,62 @@ public class Main {
 
             rootPOA.the_POAManager().activate();
 
-            HelloServiceImpl helloService = new HelloServiceImpl();
-
-            org.omg.CORBA.Object reference =
-                    rootPOA.servant_to_reference(helloService);
-
-            HelloService helloServiceRef =
-                    HelloServiceHelper.narrow(reference);
-
             org.omg.CORBA.Object namingReference =
                     orb.resolve_initial_references("NameService");
 
             NamingContextExt namingContext =
                     NamingContextExtHelper.narrow(namingReference);
 
-            NameComponent[] name = namingContext.to_name("HelloService");
+            // HelloService
 
-            namingContext.rebind(name, helloServiceRef);
+            HelloServiceImpl helloService =
+                    new HelloServiceImpl();
 
-            System.out.println("Servidor CORBA iniciado.");
-            System.out.println("HelloService registado no Naming Service.");
+            org.omg.CORBA.Object helloReference =
+                    rootPOA.servant_to_reference(helloService);
 
-            PatientServiceImpl patientService = new PatientServiceImpl();
+            HelloService helloServiceRef =
+                    HelloServiceHelper.narrow(helloReference);
+
+            NameComponent[] helloName =
+                    namingContext.to_name("HelloService");
+
+            namingContext.rebind(
+                    helloName,
+                    helloServiceRef
+            );
+
+            System.out.println(
+                    "HelloService registado no Naming Service."
+            );
+
+            // AuthService
+
+            AuthServiceImpl authService =
+                    new AuthServiceImpl();
+
+            org.omg.CORBA.Object authReference =
+                    rootPOA.servant_to_reference(authService);
+
+            AuthService authServiceRef =
+                    AuthServiceHelper.narrow(authReference);
+
+            NameComponent[] authName =
+                    namingContext.to_name("AuthService");
+
+            namingContext.rebind(
+                    authName,
+                    authServiceRef
+            );
+
+            System.out.println(
+                    "AuthService registado no Naming Service."
+            );
+
+            // PatientService
+
+            PatientServiceImpl patientService =
+                    new PatientServiceImpl();
 
             org.omg.CORBA.Object patientReference =
                     rootPOA.servant_to_reference(patientService);
@@ -58,11 +91,19 @@ public class Main {
             NameComponent[] patientName =
                     namingContext.to_name("PatientService");
 
-            namingContext.rebind(patientName, patientServiceRef);
+            namingContext.rebind(
+                    patientName,
+                    patientServiceRef
+            );
 
-            System.out.println("PatientService registado no Naming Service.");
+            System.out.println(
+                    "PatientService registado no Naming Service."
+            );
 
-            QueueServiceImpl queueService = new QueueServiceImpl();
+            // QueueService
+
+            QueueServiceImpl queueService =
+                    new QueueServiceImpl();
 
             org.omg.CORBA.Object queueReference =
                     rootPOA.servant_to_reference(queueService);
@@ -73,29 +114,45 @@ public class Main {
             NameComponent[] queueName =
                     namingContext.to_name("QueueService");
 
-            namingContext.rebind(queueName, queueServiceRef);
+            namingContext.rebind(
+                    queueName,
+                    queueServiceRef
+            );
 
-            System.out.println("QueueService registado no Naming Service.");
+            System.out.println(
+                    "QueueService registado no Naming Service."
+            );
 
+            // AppointmentService
 
             AppointmentServiceImpl appointmentService =
                     new AppointmentServiceImpl();
 
             org.omg.CORBA.Object appointmentReference =
-                    rootPOA.servant_to_reference(appointmentService);
+                    rootPOA.servant_to_reference(
+                            appointmentService
+                    );
 
             AppointmentService appointmentServiceRef =
-                    AppointmentServiceHelper.narrow(appointmentReference);
+                    AppointmentServiceHelper.narrow(
+                            appointmentReference
+                    );
 
             NameComponent[] appointmentName =
-                    namingContext.to_name("AppointmentService");
+                    namingContext.to_name(
+                            "AppointmentService"
+                    );
 
             namingContext.rebind(
                     appointmentName,
                     appointmentServiceRef
             );
 
-            System.out.println("AppointmentService registado no Naming Service.");
+            System.out.println(
+                    "AppointmentService registado no Naming Service."
+            );
+
+            System.out.println("Servidor CORBA iniciado.");
 
             orb.run();
 
