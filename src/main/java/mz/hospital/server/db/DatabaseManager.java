@@ -60,6 +60,18 @@ public class DatabaseManager {
                 )
                 """;
 
+        String notificationSql = """
+                CREATE TABLE IF NOT EXISTS notifications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    appointment_id INTEGER NOT NULL,
+                    patient_id INTEGER NOT NULL,
+                    patient_name TEXT NOT NULL,
+                    doctor TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    is_read INTEGER NOT NULL DEFAULT 0
+                )
+                """;
+
         try (Connection connection = getConnection();
              Statement statement = connection.createStatement()) {
 
@@ -67,6 +79,7 @@ public class DatabaseManager {
             statement.execute(appointmentSql);
             statement.execute(queueSql);
             statement.execute(userSql);
+            statement.execute(notificationSql);
 
         } catch (SQLException e) {
             throw new RuntimeException(

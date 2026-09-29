@@ -152,6 +152,35 @@ public class Main {
                     "AppointmentService registado no Naming Service."
             );
 
+            // NotificationService
+
+            NotificationServiceImpl notificationService =
+                    new NotificationServiceImpl();
+
+            org.omg.CORBA.Object notificationReference =
+                    rootPOA.servant_to_reference(
+                            notificationService
+                    );
+
+            NotificationService notificationServiceRef =
+                    NotificationServiceHelper.narrow(
+                            notificationReference
+                    );
+
+            NameComponent[] notificationName =
+                    namingContext.to_name(
+                            "NotificationService"
+                    );
+
+            namingContext.rebind(
+                    notificationName,
+                    notificationServiceRef
+            );
+
+            System.out.println(
+                    "NotificationService registado no Naming Service."
+            );
+
             System.out.println("Servidor CORBA iniciado.");
 
             orb.run();

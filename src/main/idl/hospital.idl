@@ -79,4 +79,36 @@ module Hospital {
 
     };
 
+    struct Notification {
+        long id;
+        long appointmentId;
+        long patientId;
+        string patientName;
+        string doctor;
+        string createdAt;
+        boolean isRead;
+    };
+
+    typedef sequence<Notification> NotificationList;
+
+    interface NotificationService {
+
+        // Chamada do médico: cria uma notificação para a recepção.
+        // O servidor atribui id, createdAt (ISO-8601) e isRead = false.
+        Notification callPatient(
+            in long appointmentId,
+            in long patientId,
+            in string patientName,
+            in string doctor
+        );
+
+        // Todas as notificações, da mais antiga para a mais recente.
+        NotificationList listNotifications();
+
+        void markAsRead(in long id);
+
+        void markAllAsRead();
+
+    };
+
 };
