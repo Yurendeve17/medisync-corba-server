@@ -1,114 +1,62 @@
-module Hospital {
+    module Hospital {
 
-    interface HelloService {
-        string sayHello();
+        interface HelloService {
+            string sayHello();
+        };
+
+        struct User { long id; string username; string fullName; string role; };
+        interface AuthService { User login(in string username, in string password); };
+
+        struct Patient { long id; string fullName; string birthDate; string gender; string phone; };
+        typedef sequence<Patient> PatientList;
+        interface PatientService {
+            Patient registerPatient(in string fullName, in string birthDate, in string gender, in string phone);
+            Patient findPatientById(in long id);
+            PatientList listPatients();
+        };
+
+        struct QueueEntry {
+            long id;
+            long appointmentId;
+            long patientId;
+            string patientName;
+            string doctor;
+            string addedAt;
+            string status;
+        };
+        typedef sequence<QueueEntry> QueueEntryList;
+
+        interface QueueService {
+            // Compatibilidade legada; novos clientes devem usar appointmentId.
+            void addToQueue(in long patientId);
+            void addAppointmentToQueue(in long appointmentId);
+            long getNextPatient();
+            long peekNextPatient();
+            QueueEntry getNextQueueEntry();
+            QueueEntry peekNextQueueEntry();
+            QueueEntryList listQueue();
+            long getQueueSize();
+        };
+
+        struct Appointment {
+            long id; long patientId; string doctor; string appointmentDate; string specialty; string status;
+        };
+        typedef sequence<Appointment> AppointmentList;
+        interface AppointmentService {
+            Appointment scheduleAppointment(in long patientId, in string doctor, in string appointmentDate, in string specialty);
+            Appointment findAppointmentById(in long id);
+            AppointmentList listAppointments();
+            void updateAppointmentStatus(in long id, in string status);
+        };
+
+        struct Notification {
+            long id; long appointmentId; long patientId; string patientName; string doctor; string createdAt; boolean isRead;
+        };
+        typedef sequence<Notification> NotificationList;
+        interface NotificationService {
+            Notification callPatient(in long appointmentId, in long patientId, in string patientName, in string doctor);
+            NotificationList listNotifications();
+            void markAsRead(in long id);
+            void markAllAsRead();
+        };
     };
-
-    struct User {
-        long id;
-        string username;
-        string fullName;
-        string role;
-    };
-
-    interface AuthService {
-        User login(
-            in string username,
-            in string password
-        );
-    };
-
-    struct Patient {
-        long id;
-        string fullName;
-        string birthDate;
-        string gender;
-        string phone;
-    };
-
-    typedef sequence<Patient> PatientList;
-
-    interface PatientService {
-
-        Patient registerPatient(
-            in string fullName,
-            in string birthDate,
-            in string gender,
-            in string phone
-        );
-
-        Patient findPatientById(
-            in long id
-        );
-
-        PatientList listPatients();
-
-    };
-
-    interface QueueService {
-        void addToQueue(in long patientId);
-        long getNextPatient();
-        long peekNextPatient();
-        long getQueueSize();
-    };
-
-    struct Appointment {
-        long id;
-        long patientId;
-        string doctor;
-        string appointmentDate;
-        string specialty;
-    };
-
-    typedef sequence<Appointment> AppointmentList;
-
-    interface AppointmentService {
-
-        Appointment scheduleAppointment(
-            in long patientId,
-            in string doctor,
-            in string appointmentDate,
-            in string specialty
-        );
-
-        Appointment findAppointmentById(
-            in long id
-        );
-
-        AppointmentList listAppointments();
-
-    };
-
-    struct Notification {
-        long id;
-        long appointmentId;
-        long patientId;
-        string patientName;
-        string doctor;
-        string createdAt;
-        boolean isRead;
-    };
-
-    typedef sequence<Notification> NotificationList;
-
-    interface NotificationService {
-
-        // Chamada do médico: cria uma notificação para a recepção.
-        // O servidor atribui id, createdAt (ISO-8601) e isRead = false.
-        Notification callPatient(
-            in long appointmentId,
-            in long patientId,
-            in string patientName,
-            in string doctor
-        );
-
-        // Todas as notificações, da mais antiga para a mais recente.
-        NotificationList listNotifications();
-
-        void markAsRead(in long id);
-
-        void markAllAsRead();
-
-    };
-
-};

@@ -16,6 +16,36 @@ public class DatabaseManager {
         return DriverManager.getConnection(URL);
     }
 
+    private static void ensureAppointmentStatusColumn(Statement statement) throws SQLException {
+        boolean exists = false;
+        try (java.sql.ResultSet result = statement.executeQuery("PRAGMA table_info(appointments)")) {
+            while (result.next()) {
+                if ("status".equalsIgnoreCase(result.getString("name"))) {
+                    exists = true;
+                    break;
+                }
+            }
+        }
+        if (!exists) {
+            statement.executeUpdate("ALTER TABLE appointments ADD COLUMN status TEXT NOT NULL DEFAULT 'AGENDADA'");
+        }
+    }
+
+
+    private static void ensureQueueColumns(Statement statement) throws SQLException {
+        boolean appointmentExists = false;
+        boolean statusExists = false;
+        try (java.sql.ResultSet result = statement.executeQuery("PRAGMA table_info(queue)")) {
+            while (result.next()) {
+                String name = result.getString("name");
+                if ("appointment_id".equalsIgnoreCase(name)) appointmentExists = true;
+                if ("status".equalsIgnoreCase(name)) statusExists = true;
+            }
+        }
+        if (!appointmentExists) statement.executeUpdate("ALTER TABLE queue ADD COLUMN appointment_id INTEGER");
+        if (!statusExists) statement.executeUpdate("ALTER TABLE queue ADD COLUMN status TEXT NOT NULL DEFAULT 'AGUARDANDO'");
+    }
+
     public static void initialize() {
 
         String patientSql = """
@@ -35,6 +65,7 @@ public class DatabaseManager {
                     doctor TEXT NOT NULL,
                     appointment_date TEXT NOT NULL,
                     specialty TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'AGENDADA',
                     FOREIGN KEY (patient_id)
                         REFERENCES patients(id)
                 )
@@ -43,10 +74,12 @@ public class DatabaseManager {
         String queueSql = """
                 CREATE TABLE IF NOT EXISTS queue (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    appointment_id INTEGER,
                     patient_id INTEGER NOT NULL,
                     added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (patient_id)
-                        REFERENCES patients(id)
+                    status TEXT NOT NULL DEFAULT 'AGUARDANDO',
+                    FOREIGN KEY (appointment_id) REFERENCES appointments(id),
+                    FOREIGN KEY (patient_id) REFERENCES patients(id)
                 )
                 """;
 
@@ -77,9 +110,17 @@ public class DatabaseManager {
 
             statement.execute(patientSql);
             statement.execute(appointmentSql);
+            ensureAppointmentStatusColumn(statement);
             statement.execute(queueSql);
             statement.execute(userSql);
             statement.execute(notificationSql);
+
+            statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_appointments_doctor_date ON appointments(doctor, appointment_date)");
+            statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_appointments_patient ON appointments(patient_id)");
+            ensureQueueColumns(statement);
+            statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_queue_patient ON queue(patient_id)");
+            statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_queue_appointment ON queue(appointment_id)");
+            statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_queue_status_order ON queue(status, id)");
 
         } catch (SQLException e) {
             throw new RuntimeException(
