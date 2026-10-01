@@ -186,7 +186,8 @@ public class AppointmentServiceImpl extends AppointmentServicePOA {
                             result.getInt("patient_id"),
                             result.getString("doctor"),
                             result.getString("appointment_date"),
-                            result.getString("specialty")
+                            result.getString("specialty"),
+                            result.getString("status")
                     );
                 }
             }
