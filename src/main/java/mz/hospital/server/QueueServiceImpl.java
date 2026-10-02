@@ -7,6 +7,7 @@ import mz.hospital.server.db.DatabaseManager;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -33,8 +34,10 @@ public class QueueServiceImpl extends QueueServicePOA {
             try {
                 AppointmentRow appointment = findAppointment(c, appointmentId);
                 if (appointment == null) throw new IllegalArgumentException("Consulta não encontrada: #" + appointmentId);
-                if (!("AGENDADA".equals(appointment.status) || "AGUARDANDO".equals(appointment.status))) {
-                    throw new IllegalArgumentException("A consulta #" + appointmentId + " não pode entrar na fila no estado " + appointment.status + ".");
+                if (!AppointmentServiceImpl.CONFIRMADA.equals(appointment.status)) {
+                    throw new IllegalArgumentException(
+                            "Só é possível adicionar à fila uma consulta CONFIRMADA após a presença do paciente."
+                    );
                 }
                 if (alreadyInActiveQueue(c, appointment.patientId)) throw new IllegalArgumentException("O paciente já está numa fila activa.");
                 try (PreparedStatement ps = c.prepareStatement("INSERT INTO queue (appointment_id, patient_id, status) VALUES (?, ?, 'AGUARDANDO')")) {
@@ -64,6 +67,16 @@ public class QueueServiceImpl extends QueueServicePOA {
     @Override public QueueEntry peekNextQueueEntry() { return findNextEntry(false); }
     @Override public QueueEntry getNextQueueEntry() { return findNextEntry(true); }
 
+    @Override
+    public QueueEntry peekNextQueueEntryForDoctor(String doctor) {
+        return findNextEntryForDoctor(doctor, false);
+    }
+
+    @Override
+    public QueueEntry getNextQueueEntryForDoctor(String doctor) {
+        return findNextEntryForDoctor(doctor, true);
+    }
+
     private QueueEntry findNextEntry(boolean consume) {
         String select = "SELECT q.id,q.appointment_id,q.patient_id,p.full_name,q.added_at,q.status,COALESCE(a.doctor,'') doctor FROM queue q JOIN patients p ON p.id=q.patient_id LEFT JOIN appointments a ON a.id=q.appointment_id WHERE q.status='AGUARDANDO' ORDER BY q.id LIMIT 1";
         try(Connection c=DatabaseManager.getConnection()){
@@ -78,6 +91,123 @@ public class QueueServiceImpl extends QueueServicePOA {
                 c.commit(); return e;
             } catch(Exception ex){c.rollback();throw ex;}
         }catch(Exception e){throw new RuntimeException("Erro ao consultar a fila.",e);}
+    }
+
+
+    private QueueEntry findNextEntryForDoctor(String doctor, boolean consume) {
+        String wantedDoctor = normalizeDoctorName(doctor);
+        if (wantedDoctor.isBlank()) {
+            throw new IllegalArgumentException("O médico é obrigatório.");
+        }
+
+        String select = """
+                SELECT q.id, q.appointment_id, q.patient_id, p.full_name,
+                       q.added_at, q.status, COALESCE(a.doctor, '') doctor
+                FROM queue q
+                JOIN patients p ON p.id = q.patient_id
+                LEFT JOIN appointments a ON a.id = q.appointment_id
+                WHERE q.status = 'AGUARDANDO'
+                ORDER BY q.id
+                """;
+
+        try (Connection c = DatabaseManager.getConnection()) {
+            c.setAutoCommit(false);
+            try (PreparedStatement ps = c.prepareStatement(select);
+                 ResultSet r = ps.executeQuery()) {
+
+                QueueEntry selected = null;
+                while (r.next()) {
+                    QueueEntry candidate = entry(r);
+                    if (normalizeDoctorName(candidate.doctor).equals(wantedDoctor)) {
+                        selected = candidate;
+                        break;
+                    }
+                }
+
+                if (selected == null) {
+                    c.commit();
+                    return new QueueEntry(0, 0, 0, "", "", "", "VAZIA");
+                }
+
+                if (consume) {
+                    if (selected.appointmentId > 0 && doctorHasActiveAppointment(c, selected.doctor, selected.appointmentId)) {
+                        throw new IllegalStateException(
+                                "O médico já está a atender outro paciente."
+                        );
+                    }
+
+                    try (PreparedStatement up = c.prepareStatement(
+                            "UPDATE queue SET status='CHAMADA' WHERE id=? AND status='AGUARDANDO'")) {
+                        up.setInt(1, selected.id);
+                        if (up.executeUpdate() != 1) {
+                            throw new IllegalStateException("O paciente já não está disponível na fila.");
+                        }
+                    }
+
+                    if (selected.appointmentId > 0) {
+                        try (PreparedStatement up = c.prepareStatement(
+                                "UPDATE appointments SET status='CHAMADA' WHERE id=? AND status='AGUARDANDO'")) {
+                            up.setInt(1, selected.appointmentId);
+                            if (up.executeUpdate() != 1) {
+                                throw new IllegalStateException(
+                                        "A consulta já não está disponível para chamada."
+                                );
+                            }
+                        }
+                    }
+
+                    c.commit();
+                    return new QueueEntry(
+                            selected.id,
+                            selected.appointmentId,
+                            selected.patientId,
+                            selected.patientName,
+                            selected.doctor,
+                            selected.addedAt,
+                            "CHAMADA"
+                    );
+                }
+
+                c.commit();
+                return selected;
+            } catch (Exception ex) {
+                c.rollback();
+                throw ex;
+            }
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException(
+                    "Erro ao consultar a fila do médico.",
+                    e
+            );
+        }
+    }
+
+    private boolean doctorHasActiveAppointment(Connection connection, String doctor, int appointmentId) throws Exception {
+        String wantedDoctor = normalizeDoctorName(doctor);
+        if (wantedDoctor.isBlank()) return false;
+
+        String sql = "SELECT id, doctor FROM appointments WHERE status='EM_ATENDIMENTO' AND id<>?";
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setInt(1, appointmentId);
+            try (ResultSet r = ps.executeQuery()) {
+                while (r.next()) {
+                    if (wantedDoctor.equals(normalizeDoctorName(r.getString("doctor")))) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private String normalizeDoctorName(String name) {
+        String text = Normalizer.normalize(name == null ? "" : name, Normalizer.Form.NFKD)
+                .replaceAll("\\p{M}", "")
+                .toLowerCase();
+        text = text.replaceAll("\\b(dr|dra|doutor|doutora)\\b\\.?", " ");
+        return text.trim().replaceAll("\\s+", " ");
     }
 
     private QueueEntry entry(ResultSet r) throws Exception {

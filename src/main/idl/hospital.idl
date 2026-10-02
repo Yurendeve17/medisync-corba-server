@@ -34,6 +34,8 @@ module Hospital {
         long peekNextPatient();
         QueueEntry getNextQueueEntry();
         QueueEntry peekNextQueueEntry();
+        QueueEntry getNextQueueEntryForDoctor(in string doctor);
+        QueueEntry peekNextQueueEntryForDoctor(in string doctor);
         QueueEntryList listQueue();
         long getQueueSize();
     };
