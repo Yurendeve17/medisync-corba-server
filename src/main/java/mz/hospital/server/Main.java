@@ -100,6 +100,15 @@ public class Main {
                     "PatientService registado no Naming Service."
             );
 
+            // DirectoryService
+
+            DirectoryServiceImpl directoryService = new DirectoryServiceImpl();
+            org.omg.CORBA.Object directoryReference = rootPOA.servant_to_reference(directoryService);
+            DirectoryService directoryServiceRef = DirectoryServiceHelper.narrow(directoryReference);
+            NameComponent[] directoryName = namingContext.to_name("DirectoryService");
+            namingContext.rebind(directoryName, directoryServiceRef);
+            System.out.println("DirectoryService registado no Naming Service.");
+
             // QueueService
 
             QueueServiceImpl queueService =

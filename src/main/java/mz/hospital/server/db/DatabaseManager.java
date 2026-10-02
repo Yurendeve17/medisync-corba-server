@@ -83,6 +83,24 @@ public class DatabaseManager {
                 )
                 """;
 
+        String specialtySql = """
+                CREATE TABLE IF NOT EXISTS specialties (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    active INTEGER NOT NULL DEFAULT 1
+                )
+                """;
+
+        String doctorSql = """
+                CREATE TABLE IF NOT EXISTS doctors (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    full_name TEXT NOT NULL UNIQUE,
+                    specialty_id INTEGER NOT NULL,
+                    active INTEGER NOT NULL DEFAULT 1,
+                    FOREIGN KEY (specialty_id) REFERENCES specialties(id)
+                )
+                """;
+
         String userSql = """
                 CREATE TABLE IF NOT EXISTS users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -112,10 +130,13 @@ public class DatabaseManager {
             statement.execute(appointmentSql);
             ensureAppointmentStatusColumn(statement);
             statement.execute(queueSql);
+            statement.execute(specialtySql);
+            statement.execute(doctorSql);
             statement.execute(userSql);
             statement.execute(notificationSql);
 
             statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_appointments_doctor_date ON appointments(doctor, appointment_date)");
+            statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_doctors_specialty ON doctors(specialty_id)");
             statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_appointments_patient ON appointments(patient_id)");
             ensureQueueColumns(statement);
             statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_queue_patient ON queue(patient_id)");
@@ -129,6 +150,7 @@ public class DatabaseManager {
             );
         }
 
+        DirectorySeeder.seed();
         UserSeeder.seed();
 
         System.out.println(

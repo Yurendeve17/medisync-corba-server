@@ -40,12 +40,16 @@ public class AppointmentTestClient {
             System.out.println("Médico: " + appointment.doctor);
             System.out.println("Data: " + appointment.appointmentDate);
             System.out.println("Especialidade: " + appointment.specialty);
+            System.out.println("Estado: " + appointment.status);
+
+            appointmentService.updateAppointmentStatus(appointment.id, "AGUARDANDO");
 
             Appointment found =
                     appointmentService.findAppointmentById(appointment.id);
 
             System.out.println("\nConsulta encontrada:");
             System.out.println("Médico: " + found.doctor);
+            System.out.println("Estado: " + found.status);
 
             Appointment[] appointments =
                     appointmentService.listAppointments();
