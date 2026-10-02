@@ -7,6 +7,8 @@ services:
     container_name: corba-nameservice
     ports:
       - "1050:1050"
+    environment:
+      CORBA_PUBLIC_HOST: ${CORBA_PUBLIC_HOST}
 
   medisync-server:
     build:
