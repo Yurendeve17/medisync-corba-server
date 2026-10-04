@@ -16,6 +16,17 @@ public class DatabaseManager {
         return DriverManager.getConnection(URL);
     }
 
+
+    private static void ensurePatientColumns(Statement statement) throws SQLException {
+        java.util.Set<String> columns = new java.util.HashSet<>();
+        try (java.sql.ResultSet result = statement.executeQuery("PRAGMA table_info(patients)")) {
+            while (result.next()) columns.add(result.getString("name").toLowerCase());
+        }
+        if (!columns.contains("address")) statement.executeUpdate("ALTER TABLE patients ADD COLUMN address TEXT NOT NULL DEFAULT ''");
+        if (!columns.contains("neighborhood")) statement.executeUpdate("ALTER TABLE patients ADD COLUMN neighborhood TEXT NOT NULL DEFAULT ''");
+        if (!columns.contains("city")) statement.executeUpdate("ALTER TABLE patients ADD COLUMN city TEXT NOT NULL DEFAULT ''");
+    }
+
     private static void ensureAppointmentStatusColumn(Statement statement) throws SQLException {
         boolean exists = false;
         try (java.sql.ResultSet result = statement.executeQuery("PRAGMA table_info(appointments)")) {
@@ -54,7 +65,10 @@ public class DatabaseManager {
                     full_name TEXT NOT NULL,
                     birth_date TEXT NOT NULL,
                     gender TEXT NOT NULL,
-                    phone TEXT NOT NULL
+                    phone TEXT NOT NULL,
+                    address TEXT NOT NULL DEFAULT '',
+                    neighborhood TEXT NOT NULL DEFAULT '',
+                    city TEXT NOT NULL DEFAULT ''
                 )
                 """;
 
@@ -127,6 +141,7 @@ public class DatabaseManager {
              Statement statement = connection.createStatement()) {
 
             statement.execute(patientSql);
+            ensurePatientColumns(statement);
             statement.execute(appointmentSql);
             ensureAppointmentStatusColumn(statement);
             statement.execute(queueSql);

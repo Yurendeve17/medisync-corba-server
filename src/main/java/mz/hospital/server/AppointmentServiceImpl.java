@@ -16,6 +16,7 @@ import java.util.List;
 public class AppointmentServiceImpl extends AppointmentServicePOA {
 
     public static final String AGENDADA = "AGENDADA";
+    public static final String CONFIRMADA = "CONFIRMADA";
     public static final String AGUARDANDO = "AGUARDANDO";
     public static final String CHAMADA = "CHAMADA";
     public static final String EM_ATENDIMENTO = "EM_ATENDIMENTO";
@@ -25,13 +26,6 @@ public class AppointmentServiceImpl extends AppointmentServicePOA {
 
     private static final DateTimeFormatter DATE_TIME_FORMAT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
-
-    /**
-     * Garante que duas threads do mesmo servidor não iniciem simultaneamente
-     * duas consultas para o mesmo médico. A regra também é validada na base
-     * de dados dentro da mesma secção crítica.
-     */
-    private static final Object ATTENDANCE_LOCK = new Object();
 
     @Override
     public Appointment scheduleAppointment(
@@ -55,9 +49,16 @@ public class AppointmentServiceImpl extends AppointmentServicePOA {
                 );
             }
 
-            if (appointmentExists(connection, normalizedDoctor, normalizedDate)) {
+            if (!doctorBelongsToSpecialty(connection, normalizedDoctor, normalizedSpecialty)) {
                 throw new IllegalArgumentException(
-                        "O médico já possui uma consulta agendada para "
+                        "O médico seleccionado não pertence à especialidade "
+                                + normalizedSpecialty + "."
+                );
+            }
+
+            if (doctorHasAppointmentWithinSlot(connection, normalizedDoctor, normalizedDate)) {
+                throw new IllegalArgumentException(
+                        "O médico já possui uma consulta incompatível com o intervalo de 30 minutos em "
                                 + normalizedDate + "."
                 );
             }
@@ -129,12 +130,88 @@ public class AppointmentServiceImpl extends AppointmentServicePOA {
 
     private void validateAppointmentDate(String appointmentDate) {
         try {
-            LocalDateTime.parse(appointmentDate, DATE_TIME_FORMAT);
+            LocalDateTime dateTime = LocalDateTime.parse(appointmentDate, DATE_TIME_FORMAT);
+            if (dateTime.getMinute() != 0 && dateTime.getMinute() != 30) {
+                throw new IllegalArgumentException(
+                        "As consultas só podem ser marcadas em intervalos de 30 minutos (ex.: 09:00, 09:30, 10:00)."
+                );
+            }
         } catch (DateTimeParseException e) {
             throw new IllegalArgumentException(
                     "Data/hora inválida. Use o formato yyyy-MM-dd HH:mm."
             );
         }
+    }
+
+    private boolean doctorBelongsToSpecialty(
+            Connection connection,
+            String doctor,
+            String specialty
+    ) throws Exception {
+        String lookup = """
+                SELECT d.full_name, s.name
+                FROM doctors d
+                JOIN specialties s ON s.id = d.specialty_id
+                WHERE d.active = 1 AND s.active = 1
+                """;
+        try (PreparedStatement statement = connection.prepareStatement(lookup);
+             ResultSet result = statement.executeQuery()) {
+            while (result.next()) {
+                if (normalizeDoctor(result.getString(1)).equals(normalizeDoctor(doctor))
+                        && normalizeText(result.getString(2)).equals(normalizeText(specialty))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean doctorHasAppointmentWithinSlot(
+            Connection connection,
+            String doctor,
+            String appointmentDate
+    ) throws Exception {
+        return doctorHasAppointmentWithinSlot(connection, doctor, appointmentDate, -1);
+    }
+
+    private boolean doctorHasAppointmentWithinSlot(
+            Connection connection,
+            String doctor,
+            String appointmentDate,
+            int excludedAppointmentId
+    ) throws Exception {
+        LocalDateTime requested = LocalDateTime.parse(appointmentDate, DATE_TIME_FORMAT);
+        String sql = """
+                SELECT appointment_date
+                FROM appointments
+                WHERE doctor = ?
+                  AND id <> ?
+                  AND status NOT IN ('CANCELADA', 'FALTOU')
+                """;
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, doctor);
+            statement.setInt(2, excludedAppointmentId);
+            try (ResultSet result = statement.executeQuery()) {
+                while (result.next()) {
+                    try {
+                        LocalDateTime existing = LocalDateTime.parse(result.getString(1), DATE_TIME_FORMAT);
+                        long minutes = Math.abs(java.time.Duration.between(existing, requested).toMinutes());
+                        if (minutes < 30) return true;
+                    } catch (DateTimeParseException ignored) {
+                        // Dados antigos inválidos não devem impedir novas marcações.
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private String normalizeText(String value) {
+        if (value == null) return "";
+        return java.text.Normalizer.normalize(value, java.text.Normalizer.Form.NFKD)
+                .replaceAll("\\p{M}", "")
+                .trim().replaceAll("\\s+", " ")
+                .toLowerCase();
     }
 
     private boolean patientExists(Connection connection, int patientId)
@@ -143,28 +220,6 @@ public class AppointmentServiceImpl extends AppointmentServicePOA {
 
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setInt(1, patientId);
-            try (ResultSet result = statement.executeQuery()) {
-                return result.next();
-            }
-        }
-    }
-
-    private boolean appointmentExists(
-            Connection connection,
-            String doctor,
-            String appointmentDate
-    ) throws Exception {
-        String sql = """
-                SELECT 1
-                FROM appointments
-                WHERE doctor = ?
-                  AND appointment_date = ?
-                LIMIT 1
-                """;
-
-        try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setString(1, doctor);
-            statement.setString(2, appointmentDate);
             try (ResultSet result = statement.executeQuery()) {
                 return result.next();
             }
@@ -245,6 +300,69 @@ public class AppointmentServiceImpl extends AppointmentServicePOA {
         }
     }
     @Override
+    public Appointment rescheduleAppointment(int id, String appointmentDate) {
+        if (id <= 0) {
+            throw new IllegalArgumentException("O ID da consulta é inválido.");
+        }
+        if (appointmentDate == null || appointmentDate.isBlank()) {
+            throw new IllegalArgumentException("A nova data e hora são obrigatórias.");
+        }
+
+        String normalizedDate = appointmentDate.trim();
+        validateAppointmentDate(normalizedDate);
+
+        try (Connection connection = DatabaseManager.getConnection()) {
+            connection.setAutoCommit(false);
+            try {
+                String doctor;
+                String specialty;
+                String currentStatus;
+                String select = "SELECT doctor, specialty, status FROM appointments WHERE id = ?";
+                try (PreparedStatement statement = connection.prepareStatement(select)) {
+                    statement.setInt(1, id);
+                    try (ResultSet result = statement.executeQuery()) {
+                        if (!result.next()) {
+                            throw new IllegalArgumentException("Consulta não encontrada: #" + id);
+                        }
+                        doctor = result.getString("doctor");
+                        specialty = result.getString("specialty");
+                        currentStatus = result.getString("status");
+                    }
+                }
+
+                if (!AGENDADA.equals(currentStatus)) {
+                    throw new IllegalArgumentException(
+                            "Só é possível reagendar consultas no estado AGENDADA."
+                    );
+                }
+
+                if (doctorHasAppointmentWithinSlot(connection, doctor, normalizedDate, id)) {
+                    throw new IllegalArgumentException(
+                            "O médico já possui uma consulta incompatível com o intervalo de 30 minutos em " + normalizedDate + "."
+                    );
+                }
+
+                String update = "UPDATE appointments SET appointment_date = ? WHERE id = ?";
+                try (PreparedStatement statement = connection.prepareStatement(update)) {
+                    statement.setString(1, normalizedDate);
+                    statement.setInt(2, id);
+                    statement.executeUpdate();
+                }
+
+                connection.commit();
+                return findAppointmentById(id);
+            } catch (Exception e) {
+                connection.rollback();
+                throw e;
+            }
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException("Erro ao reagendar consulta.", e);
+        }
+    }
+
+    @Override
     public void updateAppointmentStatus(int id, String status) {
         if (id <= 0) {
             throw new IllegalArgumentException("O ID da consulta é inválido.");
@@ -255,23 +373,21 @@ public class AppointmentServiceImpl extends AppointmentServicePOA {
             throw new IllegalArgumentException("Estado de consulta inválido: " + status);
         }
 
-        synchronized (ATTENDANCE_LOCK) {
-            try (Connection connection = DatabaseManager.getConnection()) {
+        try (Connection connection = DatabaseManager.getConnection()) {
+            connection.setAutoCommit(false);
+            try {
                 String currentStatus = null;
-                String doctor = null;
-
-                String selectSql = "SELECT status, doctor FROM appointments WHERE id = ?";
-                try (PreparedStatement statement = connection.prepareStatement(selectSql)) {
-                    statement.setInt(1, id);
-                    try (ResultSet result = statement.executeQuery()) {
-                        if (result.next()) {
-                            currentStatus = result.getString("status");
-                            doctor = result.getString("doctor");
-                        } else {
-                            throw new IllegalArgumentException("Consulta não encontrada: #" + id);
-                        }
+            String selectSql = "SELECT status FROM appointments WHERE id = ?";
+            try (PreparedStatement statement = connection.prepareStatement(selectSql)) {
+                statement.setInt(1, id);
+                try (ResultSet result = statement.executeQuery()) {
+                    if (result.next()) {
+                        currentStatus = result.getString("status");
+                    } else {
+                        throw new IllegalArgumentException("Consulta não encontrada: #" + id);
                     }
                 }
+            }
 
                 if (!isValidTransition(currentStatus, normalized)) {
                     throw new IllegalArgumentException(
@@ -279,58 +395,113 @@ public class AppointmentServiceImpl extends AppointmentServicePOA {
                     );
                 }
 
+                if (CHAMADA.equals(normalized) && !queueHasStatus(connection, id, AGUARDANDO)) {
+                    throw new IllegalArgumentException(
+                            "A consulta deve estar na fila em estado AGUARDANDO antes de ser chamada."
+                    );
+                }
+
                 if (EM_ATENDIMENTO.equals(normalized)) {
-                    String activeSql = """
-                            SELECT id
-                            FROM appointments
-                            WHERE doctor = ?
-                              AND status = ?
-                              AND id <> ?
-                            LIMIT 1
-                            """;
-
-                    try (PreparedStatement statement = connection.prepareStatement(activeSql)) {
-                        statement.setString(1, doctor == null ? "" : doctor);
-                        statement.setString(2, EM_ATENDIMENTO);
-                        statement.setInt(3, id);
-
-                        try (ResultSet result = statement.executeQuery()) {
-                            if (result.next()) {
-                                throw new IllegalArgumentException(
-                                        "O médico " + doctor
-                                                + " já está a atender a consulta #"
-                                                + result.getInt("id")
-                                                + ". Conclua esse atendimento antes de iniciar outro."
-                                );
-                            }
-                        }
+                    String doctor = findDoctor(connection, id);
+                    if (doctorHasActiveAppointment(connection, doctor, id)) {
+                        throw new IllegalArgumentException(
+                                "O médico já está a atender outro paciente."
+                        );
+                    }
+                    if (!queueHasStatus(connection, id, CHAMADA)) {
+                        throw new IllegalArgumentException(
+                                "A consulta deve estar em CHAMADA antes de iniciar o atendimento."
+                        );
                     }
                 }
 
-                String sql = "UPDATE appointments SET status = ? WHERE id = ?";
-                try (PreparedStatement statement = connection.prepareStatement(sql)) {
-                    statement.setString(1, normalized);
-                    statement.setInt(2, id);
-                    statement.executeUpdate();
+                if (CONCLUIDA.equals(normalized) && !queueHasStatus(connection, id, EM_ATENDIMENTO)) {
+                    throw new IllegalArgumentException(
+                            "A consulta deve estar EM_ATENDIMENTO antes de ser concluída."
+                    );
                 }
 
-                // Mantém a fila sincronizada com o ciclo da consulta.
-                String queueSql = "UPDATE queue SET status = ? WHERE appointment_id = ?";
-                try (PreparedStatement statement = connection.prepareStatement(queueSql)) {
-                    statement.setString(1, normalized);
-                    statement.setInt(2, id);
-                    statement.executeUpdate();
+                String sql = "UPDATE appointments SET status = ? WHERE id = ?";
+            try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                statement.setString(1, normalized);
+                statement.setInt(2, id);
+                statement.executeUpdate();
+            }
+
+                // Uma consulta cancelada deixa de ocupar a fila.
+                if (CANCELADA.equals(normalized)) {
+                    try (PreparedStatement statement = connection.prepareStatement(
+                            "DELETE FROM queue WHERE appointment_id = ?")) {
+                        statement.setInt(1, id);
+                        statement.executeUpdate();
+                    }
+                } else {
+                    // Mantém a fila sincronizada com o ciclo da consulta.
+                    String queueSql = "UPDATE queue SET status = ? WHERE appointment_id = ?";
+                        try (PreparedStatement statement = connection.prepareStatement(queueSql)) {
+                        statement.setString(1, normalized);
+                        statement.setInt(2, id);
+                        statement.executeUpdate();
+                    }
                 }
-            } catch (IllegalArgumentException e) {
-                throw e;
+                connection.commit();
             } catch (Exception e) {
-                throw new RuntimeException("Erro ao atualizar estado da consulta.", e);
+                connection.rollback();
+                throw e;
+            }
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException("Erro ao atualizar estado da consulta.", e);
+        }
+    }
+
+    private boolean queueHasStatus(Connection connection, int appointmentId, String status) throws Exception {
+        String sql = "SELECT 1 FROM queue WHERE appointment_id = ? AND status = ? LIMIT 1";
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setInt(1, appointmentId);
+            statement.setString(2, status);
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next();
             }
         }
     }
 
+    private String findDoctor(Connection connection, int appointmentId) throws Exception {
+        String sql = "SELECT doctor FROM appointments WHERE id = ?";
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setInt(1, appointmentId);
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next()) throw new IllegalArgumentException("Consulta não encontrada: #" + appointmentId);
+                return result.getString(1);
+            }
+        }
+    }
+
+    private boolean doctorHasActiveAppointment(Connection connection, String doctor, int appointmentId) throws Exception {
+        String sql = "SELECT doctor FROM appointments WHERE status = 'EM_ATENDIMENTO' AND id <> ?";
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setInt(1, appointmentId);
+            try (ResultSet result = statement.executeQuery()) {
+                while (result.next()) {
+                    if (normalizeDoctor(result.getString(1)).equals(normalizeDoctor(doctor))) return true;
+                }
+                return false;
+            }
+        }
+    }
+
+    private String normalizeDoctor(String value) {
+        if (value == null) return "";
+        String text = java.text.Normalizer.normalize(value, java.text.Normalizer.Form.NFKD)
+                .replaceAll("\\p{M}", "")
+                .toLowerCase();
+        text = text.replaceAll("\\b(dr|dra|doutor|doutora)\\b\\.?", " ");
+        return text.trim().replaceAll("\\s+", " ");
+    }
+
     private boolean isValidStatus(String status) {
-        return AGENDADA.equals(status) || AGUARDANDO.equals(status)
+        return AGENDADA.equals(status) || CONFIRMADA.equals(status) || AGUARDANDO.equals(status)
                 || CHAMADA.equals(status) || EM_ATENDIMENTO.equals(status)
                 || CONCLUIDA.equals(status) || CANCELADA.equals(status)
                 || FALTOU.equals(status);
@@ -340,7 +511,8 @@ public class AppointmentServiceImpl extends AppointmentServicePOA {
         if (current == null || current.isBlank()) return AGENDADA.equals(next);
         if (current.equals(next)) return true;
         return switch (current) {
-            case AGENDADA -> AGUARDANDO.equals(next) || CHAMADA.equals(next) || CANCELADA.equals(next) || FALTOU.equals(next);
+            case AGENDADA -> CONFIRMADA.equals(next) || CANCELADA.equals(next) || FALTOU.equals(next);
+            case CONFIRMADA -> AGUARDANDO.equals(next) || CANCELADA.equals(next) || FALTOU.equals(next);
             case AGUARDANDO -> CHAMADA.equals(next) || CANCELADA.equals(next) || FALTOU.equals(next);
             case CHAMADA -> EM_ATENDIMENTO.equals(next) || AGUARDANDO.equals(next);
             case EM_ATENDIMENTO -> CONCLUIDA.equals(next);

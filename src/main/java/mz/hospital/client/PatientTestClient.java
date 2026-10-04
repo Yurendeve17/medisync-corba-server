@@ -30,7 +30,10 @@ public class PatientTestClient {
                     "João Manuel",
                     "2001-05-15",
                     "Masculino",
-                    "841234567"
+                    "841234567",
+                    "Av. Eduardo Mondlane, Nº 123",
+                    "Sommerschield",
+                    "Maputo"
             );
 
             System.out.println("Paciente registado:");
@@ -39,6 +42,9 @@ public class PatientTestClient {
             System.out.println("Data de nascimento: " + patient.birthDate);
             System.out.println("Género: " + patient.gender);
             System.out.println("Telefone: " + patient.phone);
+            System.out.println("Morada: " + patient.address);
+            System.out.println("Bairro: " + patient.neighborhood);
+            System.out.println("Cidade: " + patient.city);
 
             Patient found =
                     patientService.findPatientById(patient.id);

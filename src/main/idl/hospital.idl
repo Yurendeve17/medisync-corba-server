@@ -7,12 +7,13 @@ module Hospital {
     struct User { long id; string username; string fullName; string role; };
     interface AuthService { User login(in string username, in string password); };
 
-    struct Patient { long id; string fullName; string birthDate; string gender; string phone; };
+    struct Patient { long id; string fullName; string birthDate; string gender; string phone; string address; string neighborhood; string city; };
     typedef sequence<Patient> PatientList;
     interface PatientService {
-        Patient registerPatient(in string fullName, in string birthDate, in string gender, in string phone);
+        Patient registerPatient(in string fullName, in string birthDate, in string gender, in string phone, in string address, in string neighborhood, in string city);
         Patient findPatientById(in long id);
         PatientList listPatients();
+        Patient updatePatient(in long id, in string fullName, in string birthDate, in string gender, in string phone, in string address, in string neighborhood, in string city);
     };
 
     struct QueueEntry {
@@ -51,6 +52,14 @@ module Hospital {
     interface DirectoryService {
         DoctorList listDoctors();
         SpecialtyList listSpecialties();
+        DoctorList listAllDoctors();
+        SpecialtyList listAllSpecialties();
+        Doctor createDoctor(in string fullName, in long specialtyId);
+        Doctor updateDoctor(in long id, in string fullName, in long specialtyId);
+        void setDoctorActive(in long id, in boolean active);
+        Specialty createSpecialty(in string name);
+        Specialty updateSpecialty(in long id, in string name);
+        void setSpecialtyActive(in long id, in boolean active);
     };
 
     interface AppointmentService {
@@ -58,6 +67,7 @@ module Hospital {
         Appointment findAppointmentById(in long id);
         AppointmentList listAppointments();
         void updateAppointmentStatus(in long id, in string status);
+        Appointment rescheduleAppointment(in long id, in string appointmentDate);
     };
 
     struct Notification {
