@@ -63,15 +63,18 @@ public class NotificationServiceImpl extends NotificationServicePOA {
         }
 
         String createdAt = LocalDateTime.now(ZONE).format(ISO_SECONDS);
+        String clinicRoom = "";
 
         String sql = """
                 INSERT INTO notifications
                 (appointment_id, patient_id, patient_name, doctor,
-                 created_at, is_read)
-                VALUES (?, ?, ?, ?, ?, 0)
+                 created_at, is_read, clinic_room)
+                VALUES (?, ?, ?, ?, ?, 0, ?)
                 """;
 
         try (Connection connection = DatabaseManager.getConnection()) {
+
+            clinicRoom = findDoctorRoom(connection, doctorName);
 
             if (name.isEmpty()) {
                 name = findPatientName(connection, patientId);
@@ -87,6 +90,7 @@ public class NotificationServiceImpl extends NotificationServicePOA {
                 statement.setString(3, name);
                 statement.setString(4, doctorName);
                 statement.setString(5, createdAt);
+                statement.setString(6, clinicRoom);
 
                 statement.executeUpdate();
 
@@ -99,7 +103,8 @@ public class NotificationServiceImpl extends NotificationServicePOA {
                                 name,
                                 doctorName,
                                 createdAt,
-                                false
+                                false,
+                                clinicRoom
                         );
                     }
                 }
@@ -125,7 +130,7 @@ public class NotificationServiceImpl extends NotificationServicePOA {
 
         String sql = """
                 SELECT id, appointment_id, patient_id, patient_name,
-                       doctor, created_at, is_read
+                       doctor, created_at, is_read, clinic_room
                 FROM notifications
                 ORDER BY id
                 """;
@@ -144,7 +149,8 @@ public class NotificationServiceImpl extends NotificationServicePOA {
                         result.getString("patient_name"),
                         result.getString("doctor"),
                         result.getString("created_at"),
-                        result.getInt("is_read") != 0
+                        result.getInt("is_read") != 0,
+                        result.getString("clinic_room")
                 ));
             }
 
@@ -217,6 +223,13 @@ public class NotificationServiceImpl extends NotificationServicePOA {
             try (ResultSet result = statement.executeQuery()) {
                 return result.next() ? result.getString("full_name") : "";
             }
+        }
+    }
+
+    private static String findDoctorRoom(Connection connection, String doctor) throws Exception {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT clinic_room FROM doctors WHERE lower(full_name)=lower(?) LIMIT 1")) {
+            statement.setString(1, doctor);
+            try (ResultSet result = statement.executeQuery()) { return result.next() ? result.getString(1) : ""; }
         }
     }
 }

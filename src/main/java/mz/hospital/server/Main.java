@@ -16,6 +16,7 @@ public class Main {
         try {
 
             DatabaseManager.initialize();
+            AppointmentMaintenance.start();
 
             ORB orb = ORB.init(args, null);
 
@@ -76,6 +77,12 @@ public class Main {
             System.out.println(
                     "AuthService registado no Naming Service."
             );
+
+            UserServiceImpl userService = new UserServiceImpl();
+            org.omg.CORBA.Object userReference = rootPOA.servant_to_reference(userService);
+            UserService userServiceRef = UserServiceHelper.narrow(userReference);
+            namingContext.rebind(namingContext.to_name("UserService"), userServiceRef);
+            System.out.println("UserService registado no Naming Service.");
 
             // PatientService
 
@@ -189,6 +196,24 @@ public class Main {
             System.out.println(
                     "NotificationService registado no Naming Service."
             );
+
+            ReportServiceImpl reportService = new ReportServiceImpl();
+            org.omg.CORBA.Object reportReference = rootPOA.servant_to_reference(reportService);
+            ReportService reportServiceRef = ReportServiceHelper.narrow(reportReference);
+            namingContext.rebind(namingContext.to_name("ReportService"), reportServiceRef);
+            System.out.println("ReportService registado no Naming Service.");
+
+            DoctorServiceImpl doctorService = new DoctorServiceImpl();
+            org.omg.CORBA.Object doctorReference = rootPOA.servant_to_reference(doctorService);
+            DoctorService doctorServiceRef = DoctorServiceHelper.narrow(doctorReference);
+            namingContext.rebind(namingContext.to_name("DoctorService"), doctorServiceRef);
+            System.out.println("DoctorService registado no Naming Service.");
+
+            AdminServiceImpl adminService = new AdminServiceImpl();
+            org.omg.CORBA.Object adminReference = rootPOA.servant_to_reference(adminService);
+            AdminService adminServiceRef = AdminServiceHelper.narrow(adminReference);
+            namingContext.rebind(namingContext.to_name("AdminService"), adminServiceRef);
+            System.out.println("AdminService registado no Naming Service.");
 
             System.out.println("Servidor CORBA iniciado.");
 

@@ -8,7 +8,7 @@ services:
     ports:
       - "1050:1050"
     environment:
-      CORBA_PUBLIC_HOST: ${CORBA_PUBLIC_HOST}
+      CORBA_PUBLIC_HOST: ${CORBA_PUBLIC_HOST:?Defina CORBA_PUBLIC_HOST como IP ou DNS acessivel pelos clientes}
 
   medisync-server:
     build:
@@ -20,7 +20,9 @@ services:
     ports:
       - "2809:2809"
     environment:
-      CORBA_PUBLIC_HOST: ${CORBA_PUBLIC_HOST}
+      CORBA_PUBLIC_HOST: ${CORBA_PUBLIC_HOST:?Defina CORBA_PUBLIC_HOST como IP ou DNS acessivel pelos clientes}
       HOSPITAL_TIMEZONE: ${HOSPITAL_TIMEZONE:-Africa/Maputo}
+      MEDISYNC_ADMIN_USERNAME: ${MEDISYNC_ADMIN_USERNAME:-}
+      MEDISYNC_ADMIN_PASSWORD: ${MEDISYNC_ADMIN_PASSWORD:-}
     volumes:
       - ./src/main/resources:/app/src/main/resources

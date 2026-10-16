@@ -13,26 +13,17 @@ public final class UserSeeder {
 
     public static void seed() {
 
-        createUserIfNotExists(
-                "recepcao01",
-                "Recepção Principal",
-                "RECEPTION",
-                "recepcao123"
-        );
+        String adminUsername = System.getenv("MEDISYNC_ADMIN_USERNAME");
+        String adminPassword = System.getenv("MEDISYNC_ADMIN_PASSWORD");
+        if (adminUsername != null && !adminUsername.isBlank()
+                && adminPassword != null && adminPassword.length() >= 10) {
+            createUserIfNotExists(adminUsername.trim(), "Administrador MediSync", "ADMIN", adminPassword);
+        } else {
+            System.err.println("Conta ADMIN não criada: configure MEDISYNC_ADMIN_USERNAME e MEDISYNC_ADMIN_PASSWORD (mínimo 10 caracteres).");
+        }
 
-        createUserIfNotExists(
-                "dr_carlos",
-                "Carlos Silva",
-                "DOCTOR",
-                "carlos123"
-        );
-
-        createUserIfNotExists(
-                "dr_joana",
-                "Joana Paulo",
-                "DOCTOR",
-                "joana123"
-        );
+        // Não criar credenciais previsíveis em instalações novas. A conta
+        // administrativa inicial só é criada a partir das variáveis de ambiente.
     }
 
     private static void createUserIfNotExists(

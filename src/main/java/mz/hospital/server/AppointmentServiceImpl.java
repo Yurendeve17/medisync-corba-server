@@ -3,6 +3,7 @@ package mz.hospital.server;
 import Hospital.Appointment;
 import Hospital.AppointmentServicePOA;
 import mz.hospital.server.db.DatabaseManager;
+import mz.hospital.server.db.AuditLogger;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -43,6 +44,7 @@ public class AppointmentServiceImpl extends AppointmentServicePOA {
         validateAppointmentDate(normalizedDate);
 
         try (Connection connection = DatabaseManager.getConnection()) {
+            connection.setAutoCommit(false);
             if (!patientExists(connection, patientId)) {
                 throw new IllegalArgumentException(
                         "Paciente não encontrado: #" + patientId
@@ -56,6 +58,7 @@ public class AppointmentServiceImpl extends AppointmentServicePOA {
                 );
             }
 
+            validateWorkingHours(connection, normalizedDoctor, normalizedDate);
             if (doctorHasAppointmentWithinSlot(connection, normalizedDoctor, normalizedDate)) {
                 throw new IllegalArgumentException(
                         "O médico já possui uma consulta incompatível com o intervalo de 30 minutos em "
@@ -82,9 +85,12 @@ public class AppointmentServiceImpl extends AppointmentServicePOA {
 
                 try (ResultSet keys = statement.getGeneratedKeys()) {
                     if (keys.next()) {
+                        int generatedId = keys.getInt(1);
+                        connection.commit();
                         return new Appointment(
-                                keys.getInt(1),
+                                generatedId,
                                 patientId,
+                                "",
                                 normalizedDoctor,
                                 normalizedDate,
                                 normalizedSpecialty,
@@ -131,6 +137,8 @@ public class AppointmentServiceImpl extends AppointmentServicePOA {
     private void validateAppointmentDate(String appointmentDate) {
         try {
             LocalDateTime dateTime = LocalDateTime.parse(appointmentDate, DATE_TIME_FORMAT);
+            if (dateTime.isBefore(LocalDateTime.now(hospitalZone())))
+                throw new IllegalArgumentException("Não é possível agendar uma consulta no passado.");
             if (dateTime.getMinute() != 0 && dateTime.getMinute() != 30) {
                 throw new IllegalArgumentException(
                         "As consultas só podem ser marcadas em intervalos de 30 minutos (ex.: 09:00, 09:30, 10:00)."
@@ -206,6 +214,32 @@ public class AppointmentServiceImpl extends AppointmentServicePOA {
         return false;
     }
 
+    private void validateWorkingHours(Connection connection, String doctor, String appointmentDate) throws Exception {
+        String days = "", start = "", end = "";
+        try (PreparedStatement ps = connection.prepareStatement("SELECT full_name,working_days,start_time,end_time FROM doctors WHERE active=1")) {
+            try (ResultSet r = ps.executeQuery()) {
+                while (r.next()) if (normalizeDoctor(r.getString(1)).equals(normalizeDoctor(doctor))) {
+                    days = r.getString(2); start = r.getString(3); end = r.getString(4); break;
+                }
+            }
+        }
+        if (days == null || days.isBlank()) return;
+        LocalDateTime requested = LocalDateTime.parse(appointmentDate, DATE_TIME_FORMAT);
+        String[] dayNames = {"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"};
+        String day = dayNames[requested.getDayOfWeek().getValue() - 1];
+        boolean dayAllowed = java.util.Arrays.stream(days.split(",")).map(String::trim).anyMatch(day::equalsIgnoreCase);
+        if (!dayAllowed) throw new IllegalArgumentException("O médico não atende nesse dia da semana.");
+        try {
+            java.time.LocalTime from = java.time.LocalTime.parse(start);
+            java.time.LocalTime until = java.time.LocalTime.parse(end);
+            java.time.LocalTime slotEnd = requested.toLocalTime().plusMinutes(30);
+            if (requested.toLocalTime().isBefore(from) || slotEnd.isAfter(until))
+                throw new IllegalArgumentException("O horário está fora do período de atendimento do médico (" + start + "-" + end + ").");
+        } catch (java.time.format.DateTimeParseException e) {
+            throw new IllegalStateException("O horário de atendimento do médico está mal configurado.", e);
+        }
+    }
+
     private String normalizeText(String value) {
         if (value == null) return "";
         return java.text.Normalizer.normalize(value, java.text.Normalizer.Form.NFKD)
@@ -230,9 +264,9 @@ public class AppointmentServiceImpl extends AppointmentServicePOA {
     public Appointment findAppointmentById(int id) {
 
         String sql = """
-                SELECT id, patient_id, doctor, appointment_date, specialty, status
-                FROM appointments
-                WHERE id = ?
+                SELECT a.id, a.patient_id, p.full_name patient_name, a.doctor, a.appointment_date, a.specialty, a.status
+                FROM appointments a JOIN patients p ON p.id=a.patient_id
+                WHERE a.id = ?
                 """;
 
         try (Connection connection = DatabaseManager.getConnection();
@@ -246,6 +280,7 @@ public class AppointmentServiceImpl extends AppointmentServicePOA {
                     return new Appointment(
                             result.getInt("id"),
                             result.getInt("patient_id"),
+                            result.getString("patient_name"),
                             result.getString("doctor"),
                             result.getString("appointment_date"),
                             result.getString("specialty"),
@@ -254,7 +289,7 @@ public class AppointmentServiceImpl extends AppointmentServicePOA {
                 }
             }
 
-            return new Appointment(0, 0, "", "", "", "");
+            return new Appointment(0, 0, "", "", "", "", "");
 
         } catch (Exception e) {
             throw new RuntimeException(
@@ -268,9 +303,9 @@ public class AppointmentServiceImpl extends AppointmentServicePOA {
     public Appointment[] listAppointments() {
 
         String sql = """
-                SELECT id, patient_id, doctor, appointment_date, specialty, status
-                FROM appointments
-                ORDER BY appointment_date, id
+                SELECT a.id, a.patient_id, p.full_name patient_name, a.doctor, a.appointment_date, a.specialty, a.status
+                FROM appointments a JOIN patients p ON p.id=a.patient_id
+                ORDER BY a.appointment_date, a.id
                 """;
 
         List<Appointment> appointments = new ArrayList<>();
@@ -283,6 +318,7 @@ public class AppointmentServiceImpl extends AppointmentServicePOA {
                 appointments.add(new Appointment(
                         result.getInt("id"),
                         result.getInt("patient_id"),
+                        result.getString("patient_name"),
                         result.getString("doctor"),
                         result.getString("appointment_date"),
                         result.getString("specialty"),
@@ -300,7 +336,10 @@ public class AppointmentServiceImpl extends AppointmentServicePOA {
         }
     }
     @Override
-    public Appointment rescheduleAppointment(int id, String appointmentDate) {
+    public Appointment rescheduleAppointment(int id, String appointmentDate) { return rescheduleAppointmentWithReason(id, appointmentDate, ""); }
+
+    @Override
+    public Appointment rescheduleAppointmentWithReason(int id, String appointmentDate, String reason) {
         if (id <= 0) {
             throw new IllegalArgumentException("O ID da consulta é inválido.");
         }
@@ -341,13 +380,17 @@ public class AppointmentServiceImpl extends AppointmentServicePOA {
                             "O médico já possui uma consulta incompatível com o intervalo de 30 minutos em " + normalizedDate + "."
                     );
                 }
+                validateWorkingHours(connection, doctor, normalizedDate);
 
-                String update = "UPDATE appointments SET appointment_date = ? WHERE id = ?";
+                String update = "UPDATE appointments SET appointment_date = ?,change_reason=? WHERE id = ?";
                 try (PreparedStatement statement = connection.prepareStatement(update)) {
                     statement.setString(1, normalizedDate);
-                    statement.setInt(2, id);
+                    statement.setString(2, reason == null ? "" : reason.trim());
+                    statement.setInt(3, id);
                     statement.executeUpdate();
                 }
+
+                AuditLogger.log(connection, null, "", "APPOINTMENT_RESCHEDULED", "APPOINTMENT", id, reason);
 
                 connection.commit();
                 return findAppointmentById(id);
@@ -360,6 +403,36 @@ public class AppointmentServiceImpl extends AppointmentServicePOA {
         } catch (Exception e) {
             throw new RuntimeException("Erro ao reagendar consulta.", e);
         }
+    }
+
+    @Override
+    public void cancelAppointment(int id, String reason) {
+        if (id <= 0) throw new IllegalArgumentException("O ID da consulta é inválido.");
+        String why = reason == null ? "" : reason.trim();
+        try (Connection c = DatabaseManager.getConnection()) {
+            c.setAutoCommit(false);
+            try {
+                String current;
+                try (PreparedStatement ps = c.prepareStatement("SELECT status FROM appointments WHERE id=?")) {
+                    ps.setInt(1, id); try (ResultSet r = ps.executeQuery()) {
+                        if (!r.next()) throw new IllegalArgumentException("Consulta não encontrada: #" + id);
+                        current = r.getString(1);
+                    }
+                }
+                if (!AGENDADA.equals(current) && !CONFIRMADA.equals(current) && !AGUARDANDO.equals(current))
+                    throw new IllegalArgumentException("A consulta não pode ser cancelada no estado " + current + ".");
+                try (PreparedStatement ps = c.prepareStatement("UPDATE appointments SET status='CANCELADA',cancel_reason=? WHERE id=? AND status=?")) {
+                    ps.setString(1, why); ps.setInt(2, id); ps.setString(3, current);
+                    if (ps.executeUpdate() != 1) throw new IllegalStateException("A consulta foi alterada por outra operação.");
+                }
+                try (PreparedStatement ps = c.prepareStatement("UPDATE queue SET status='CANCELADA' WHERE appointment_id=? AND status IN ('AGUARDANDO','CHAMADA')")) {
+                    ps.setInt(1, id); ps.executeUpdate();
+                }
+                AuditLogger.log(c, null, "", "APPOINTMENT_CANCELLED", "APPOINTMENT", id, why);
+                c.commit();
+            } catch (Exception e) { c.rollback(); throw e; }
+        } catch (IllegalArgumentException e) { throw e; }
+          catch (Exception e) { throw new RuntimeException("Erro ao cancelar consulta.", e); }
     }
 
     @Override
@@ -430,11 +503,7 @@ public class AppointmentServiceImpl extends AppointmentServicePOA {
 
                 // Uma consulta cancelada deixa de ocupar a fila.
                 if (CANCELADA.equals(normalized)) {
-                    try (PreparedStatement statement = connection.prepareStatement(
-                            "DELETE FROM queue WHERE appointment_id = ?")) {
-                        statement.setInt(1, id);
-                        statement.executeUpdate();
-                    }
+                    try (PreparedStatement statement = connection.prepareStatement("UPDATE queue SET status='CANCELADA' WHERE appointment_id=? AND status IN ('AGUARDANDO','CHAMADA')")) { statement.setInt(1, id); statement.executeUpdate(); }
                 } else {
                     // Mantém a fila sincronizada com o ciclo da consulta.
                     String queueSql = "UPDATE queue SET status = ? WHERE appointment_id = ?";
@@ -444,6 +513,17 @@ public class AppointmentServiceImpl extends AppointmentServicePOA {
                         statement.executeUpdate();
                     }
                 }
+                String timestampColumn = switch (normalized) {
+                    case CHAMADA -> "called_at";
+                    case EM_ATENDIMENTO -> "started_at";
+                    case CONCLUIDA -> "completed_at";
+                    default -> null;
+                };
+                if (timestampColumn != null) {
+                    String now = java.time.ZonedDateTime.now(hospitalZone()).toString();
+                    try (PreparedStatement ps = connection.prepareStatement("UPDATE queue SET " + timestampColumn + "=? WHERE appointment_id=?")) { ps.setString(1, now); ps.setInt(2, id); ps.executeUpdate(); }
+                }
+                AuditLogger.log(connection, null, "", "APPOINTMENT_STATE_CHANGED", "APPOINTMENT", id, currentStatus + " -> " + normalized);
                 connection.commit();
             } catch (Exception e) {
                 connection.rollback();
@@ -504,7 +584,7 @@ public class AppointmentServiceImpl extends AppointmentServicePOA {
         return AGENDADA.equals(status) || CONFIRMADA.equals(status) || AGUARDANDO.equals(status)
                 || CHAMADA.equals(status) || EM_ATENDIMENTO.equals(status)
                 || CONCLUIDA.equals(status) || CANCELADA.equals(status)
-                || FALTOU.equals(status);
+                || FALTOU.equals(status) || "DESISTIU".equals(status);
     }
 
     private boolean isValidTransition(String current, String next) {
@@ -516,8 +596,14 @@ public class AppointmentServiceImpl extends AppointmentServicePOA {
             case AGUARDANDO -> CHAMADA.equals(next) || CANCELADA.equals(next) || FALTOU.equals(next);
             case CHAMADA -> EM_ATENDIMENTO.equals(next) || AGUARDANDO.equals(next);
             case EM_ATENDIMENTO -> CONCLUIDA.equals(next);
+            case "DESISTIU" -> false;
             default -> false;
         };
+    }
+
+    private static java.time.ZoneId hospitalZone() {
+        try { return java.time.ZoneId.of(System.getenv().getOrDefault("HOSPITAL_TIMEZONE", "Africa/Maputo")); }
+        catch (Exception e) { return java.time.ZoneId.of("Africa/Maputo"); }
     }
 
 }

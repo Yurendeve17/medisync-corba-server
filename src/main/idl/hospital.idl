@@ -4,8 +4,8 @@ module Hospital {
         string sayHello();
     };
 
-    struct User { long id; string username; string fullName; string role; };
-    interface AuthService { User login(in string username, in string password); };
+    struct User { long id; string username; string fullName; string role; string sessionToken; };
+    interface AuthService { User login(in string username, in string password); void logout(in string sessionToken); };
 
     struct Patient { long id; string fullName; string birthDate; string gender; string phone; string address; string neighborhood; string city; };
     typedef sequence<Patient> PatientList;
@@ -13,6 +13,8 @@ module Hospital {
         Patient registerPatient(in string fullName, in string birthDate, in string gender, in string phone, in string address, in string neighborhood, in string city);
         Patient findPatientById(in long id);
         PatientList listPatients();
+        PatientList searchPatients(in string query);
+        boolean hasPossibleDuplicate(in string fullName, in string birthDate, in string phone, in long excludeId);
         Patient updatePatient(in long id, in string fullName, in string birthDate, in string gender, in string phone, in string address, in string neighborhood, in string city);
     };
 
@@ -24,6 +26,7 @@ module Hospital {
         string doctor;
         string addedAt;
         string status;
+        long priority;
     };
     typedef sequence<QueueEntry> QueueEntryList;
 
@@ -31,35 +34,42 @@ module Hospital {
         // Compatibilidade legada; novos clientes devem usar appointmentId.
         void addToQueue(in long patientId);
         void addAppointmentToQueue(in long appointmentId);
+        void addAppointmentToQueueWithPriority(in long appointmentId, in long priority);
+        QueueEntry addWalkInToQueue(in long patientId, in string doctor, in string specialty, in long priority);
+        void withdrawQueueEntry(in long queueEntryId, in string reason);
         long getNextPatient();
         long peekNextPatient();
         QueueEntry getNextQueueEntry();
         QueueEntry peekNextQueueEntry();
         QueueEntry getNextQueueEntryForDoctor(in string doctor);
+        QueueEntry callNextQueueEntryForDoctor(in string sessionToken, in string doctor);
+        double estimatedWaitMinutesForQueueEntry(in long queueEntryId);
         QueueEntry peekNextQueueEntryForDoctor(in string doctor);
         QueueEntryList listQueue();
         long getQueueSize();
     };
 
     struct Appointment {
-        long id; long patientId; string doctor; string appointmentDate; string specialty; string status;
+        long id; long patientId; string patientName; string doctor; string appointmentDate; string specialty; string status;
     };
     typedef sequence<Appointment> AppointmentList;
-    struct Doctor { long id; string fullName; string specialty; boolean active; };
+    struct Doctor { long id; string fullName; string specialty; boolean active; string clinicRoom; string workingDays; string startTime; string endTime; };
     typedef sequence<Doctor> DoctorList;
     struct Specialty { long id; string name; boolean active; };
     typedef sequence<Specialty> SpecialtyList;
     interface DirectoryService {
         DoctorList listDoctors();
         SpecialtyList listSpecialties();
-        DoctorList listAllDoctors();
-        SpecialtyList listAllSpecialties();
-        Doctor createDoctor(in string fullName, in long specialtyId);
-        Doctor updateDoctor(in long id, in string fullName, in long specialtyId);
-        void setDoctorActive(in long id, in boolean active);
-        Specialty createSpecialty(in string name);
-        Specialty updateSpecialty(in long id, in string name);
-        void setSpecialtyActive(in long id, in boolean active);
+        DoctorList listAllDoctors(in string sessionToken);
+        SpecialtyList listAllSpecialties(in string sessionToken);
+        Doctor createDoctor(in string sessionToken, in string fullName, in long specialtyId);
+        Doctor updateDoctor(in string sessionToken, in long id, in string fullName, in long specialtyId);
+        void setDoctorActive(in string sessionToken, in long id, in boolean active);
+        void setDoctorRoom(in string sessionToken, in long id, in string clinicRoom);
+        void setDoctorSchedule(in string sessionToken, in long id, in string workingDays, in string startTime, in string endTime);
+        Specialty createSpecialty(in string sessionToken, in string name);
+        Specialty updateSpecialty(in string sessionToken, in long id, in string name);
+        void setSpecialtyActive(in string sessionToken, in long id, in boolean active);
     };
 
     interface AppointmentService {
@@ -68,10 +78,12 @@ module Hospital {
         AppointmentList listAppointments();
         void updateAppointmentStatus(in long id, in string status);
         Appointment rescheduleAppointment(in long id, in string appointmentDate);
+        Appointment rescheduleAppointmentWithReason(in long id, in string appointmentDate, in string reason);
+        void cancelAppointment(in long id, in string reason);
     };
 
     struct Notification {
-        long id; long appointmentId; long patientId; string patientName; string doctor; string createdAt; boolean isRead;
+        long id; long appointmentId; long patientId; string patientName; string doctor; string createdAt; boolean isRead; string clinicRoom;
     };
     typedef sequence<Notification> NotificationList;
     interface NotificationService {
@@ -79,5 +91,60 @@ module Hospital {
         NotificationList listNotifications();
         void markAsRead(in long id);
         void markAllAsRead();
+    };
+
+    struct ManagedUser { long id; string username; string fullName; string role; boolean active; };
+    typedef sequence<ManagedUser> ManagedUserList;
+    interface UserService {
+        ManagedUserList listUsers(in string sessionToken);
+        ManagedUser createUser(in string sessionToken, in string username, in string fullName, in string role, in string initialPassword);
+        void setUserActive(in string sessionToken, in long id, in boolean active);
+        void resetPassword(in string sessionToken, in long id, in string newPassword);
+        void changePassword(in string sessionToken, in string currentPassword, in string newPassword);
+    };
+
+    struct DailySummaryData {
+        long appointmentsRegistered; long waiting; long attended; long absences; long cancellations;
+    };
+    struct AverageTime { string doctor; double averageWaitMinutes; double averageServiceMinutes; long completedCount; };
+    typedef sequence<AverageTime> AverageTimeList;
+    struct SpecialtyVolume { string specialty; long appointments; long absences; long cancellations; };
+    typedef sequence<SpecialtyVolume> SpecialtyVolumeList;
+    struct ReceptionStatisticsData {
+        long appointments; long attended; long patientsRegistered; long dropouts; long absences;
+        double averageWaitMinutes; double dropoutRate; double absenceRate;
+    };
+    struct DoctorStatistics { long consultationsToday; long consultationsMonth; double averageServiceMinutes; };
+    struct DiagnosisVolume { string diagnosis; long consultations; };
+    typedef sequence<DiagnosisVolume> DiagnosisVolumeList;
+    struct ClinicalNote {
+        long appointmentId; long patientId; string patientName; string doctor; string appointmentDate;
+        string diagnosis; string observations; string prescription; string createdAt;
+        string vitalSigns; string carePlan; string updatedAt;
+    };
+    typedef sequence<ClinicalNote> ClinicalNoteList;
+    struct AuditEntry { long id; string username; string action; string entityType; long entityId; string details; string createdAt; };
+    typedef sequence<AuditEntry> AuditEntryList;
+    struct SystemSetting { string key; string value; };
+    typedef sequence<SystemSetting> SystemSettingList;
+    interface ReportService {
+        DailySummaryData dailySummary(in string sessionToken, in string date);
+        AverageTimeList averageTimes(in string sessionToken, in string fromDate, in string toDate);
+        SpecialtyVolumeList specialtyVolumes(in string sessionToken, in string fromDate, in string toDate);
+        ReceptionStatisticsData receptionStatistics(in string sessionToken, in string fromDate, in string toDate);
+    };
+    interface DoctorService {
+        AppointmentList myAppointments(in string sessionToken);
+        ClinicalNoteList patientHistory(in string sessionToken, in long patientId);
+        ClinicalNote saveClinicalNote(in string sessionToken, in long appointmentId, in string diagnosis, in string observations, in string prescription);
+        ClinicalNote saveClinicalNoteExtended(in string sessionToken, in long appointmentId, in string diagnosis, in string observations, in string prescription, in string vitalSigns, in string carePlan);
+        void updateMyAppointmentStatus(in string sessionToken, in long appointmentId, in string status);
+        DoctorStatistics myStatistics(in string sessionToken, in string fromDate, in string toDate);
+        DiagnosisVolumeList diagnosisVolumes(in string sessionToken, in string fromDate, in string toDate);
+    };
+    interface AdminService {
+        AuditEntryList listAuditLogs(in string sessionToken, in string fromDate, in string toDate);
+        SystemSettingList listSettings(in string sessionToken);
+        void setSetting(in string sessionToken, in string key, in string value);
     };
 };

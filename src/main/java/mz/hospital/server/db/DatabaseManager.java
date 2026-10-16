@@ -46,15 +46,35 @@ public class DatabaseManager {
     private static void ensureQueueColumns(Statement statement) throws SQLException {
         boolean appointmentExists = false;
         boolean statusExists = false;
+        java.util.Set<String> columns = new java.util.HashSet<>();
         try (java.sql.ResultSet result = statement.executeQuery("PRAGMA table_info(queue)")) {
             while (result.next()) {
                 String name = result.getString("name");
+                columns.add(name.toLowerCase());
                 if ("appointment_id".equalsIgnoreCase(name)) appointmentExists = true;
                 if ("status".equalsIgnoreCase(name)) statusExists = true;
             }
         }
         if (!appointmentExists) statement.executeUpdate("ALTER TABLE queue ADD COLUMN appointment_id INTEGER");
         if (!statusExists) statement.executeUpdate("ALTER TABLE queue ADD COLUMN status TEXT NOT NULL DEFAULT 'AGUARDANDO'");
+        if (!columns.contains("priority")) statement.executeUpdate("ALTER TABLE queue ADD COLUMN priority INTEGER NOT NULL DEFAULT 0");
+        if (!columns.contains("withdrawal_reason")) statement.executeUpdate("ALTER TABLE queue ADD COLUMN withdrawal_reason TEXT NOT NULL DEFAULT ''");
+        if (!columns.contains("withdrawn_at")) statement.executeUpdate("ALTER TABLE queue ADD COLUMN withdrawn_at TEXT");
+        if (!columns.contains("called_at")) statement.executeUpdate("ALTER TABLE queue ADD COLUMN called_at TEXT");
+        if (!columns.contains("started_at")) statement.executeUpdate("ALTER TABLE queue ADD COLUMN started_at TEXT");
+        if (!columns.contains("completed_at")) statement.executeUpdate("ALTER TABLE queue ADD COLUMN completed_at TEXT");
+    }
+
+    private static void ensureColumns(Statement statement, String table, java.util.Map<String, String> required) throws SQLException {
+        java.util.Set<String> columns = new java.util.HashSet<>();
+        try (java.sql.ResultSet result = statement.executeQuery("PRAGMA table_info(" + table + ")")) {
+            while (result.next()) columns.add(result.getString("name").toLowerCase());
+        }
+        for (var column : required.entrySet()) {
+            if (!columns.contains(column.getKey().toLowerCase())) {
+                statement.executeUpdate("ALTER TABLE " + table + " ADD COLUMN " + column.getKey() + " " + column.getValue());
+            }
+        }
     }
 
     public static void initialize() {
@@ -121,7 +141,10 @@ public class DatabaseManager {
                     username TEXT NOT NULL UNIQUE,
                     password_hash TEXT NOT NULL,
                     full_name TEXT NOT NULL,
-                    role TEXT NOT NULL
+                    role TEXT NOT NULL,
+                    active INTEGER NOT NULL DEFAULT 1,
+                    failed_login_attempts INTEGER NOT NULL DEFAULT 0,
+                    locked_until TEXT
                 )
                 """;
 
@@ -137,6 +160,36 @@ public class DatabaseManager {
                 )
                 """;
 
+        String auditSql = """
+                CREATE TABLE IF NOT EXISTS audit_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    username TEXT NOT NULL DEFAULT '',
+                    action TEXT NOT NULL,
+                    entity_type TEXT NOT NULL,
+                    entity_id INTEGER,
+                    details TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL
+                )
+                """;
+        String clinicalNotesSql = """
+                CREATE TABLE IF NOT EXISTS clinical_notes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    appointment_id INTEGER NOT NULL UNIQUE,
+                    patient_id INTEGER NOT NULL,
+                    doctor TEXT NOT NULL,
+                    diagnosis TEXT NOT NULL,
+                    observations TEXT NOT NULL DEFAULT '',
+                    prescription TEXT NOT NULL DEFAULT '',
+                    author_user_id INTEGER,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (appointment_id) REFERENCES appointments(id),
+                    FOREIGN KEY (patient_id) REFERENCES patients(id)
+                )
+                """;
+        String settingsSql = "CREATE TABLE IF NOT EXISTS system_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)";
+
         try (Connection connection = getConnection();
              Statement statement = connection.createStatement()) {
 
@@ -149,6 +202,25 @@ public class DatabaseManager {
             statement.execute(doctorSql);
             statement.execute(userSql);
             statement.execute(notificationSql);
+            statement.execute(auditSql);
+            statement.execute(clinicalNotesSql);
+            statement.execute(settingsSql);
+            ensureColumns(statement, "patients", java.util.Map.of("registered_at", "TEXT NOT NULL DEFAULT ''"));
+            statement.executeUpdate("UPDATE patients SET registered_at=datetime('now') WHERE registered_at=''");
+            ensureColumns(statement, "queue", java.util.Map.of(
+                    "priority", "INTEGER NOT NULL DEFAULT 0",
+                    "withdrawal_reason", "TEXT NOT NULL DEFAULT ''",
+                    "withdrawn_at", "TEXT", "called_at", "TEXT", "started_at", "TEXT", "completed_at", "TEXT"));
+            ensureColumns(statement, "appointments", java.util.Map.of(
+                    "cancel_reason", "TEXT NOT NULL DEFAULT ''", "change_reason", "TEXT NOT NULL DEFAULT ''"));
+            ensureColumns(statement, "doctors", java.util.Map.of(
+                    "clinic_room", "TEXT NOT NULL DEFAULT ''", "user_id", "INTEGER",
+                    "working_days", "TEXT NOT NULL DEFAULT ''", "start_time", "TEXT NOT NULL DEFAULT ''", "end_time", "TEXT NOT NULL DEFAULT ''"));
+            ensureColumns(statement, "clinical_notes", java.util.Map.of(
+                    "vital_signs", "TEXT NOT NULL DEFAULT ''", "care_plan", "TEXT NOT NULL DEFAULT ''"));
+            ensureColumns(statement, "users", java.util.Map.of(
+                    "active", "INTEGER NOT NULL DEFAULT 1", "failed_login_attempts", "INTEGER NOT NULL DEFAULT 0", "locked_until", "TEXT"));
+            ensureColumns(statement, "notifications", java.util.Map.of("clinic_room", "TEXT NOT NULL DEFAULT ''"));
 
             statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_appointments_doctor_date ON appointments(doctor, appointment_date)");
             statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_doctors_specialty ON doctors(specialty_id)");
@@ -157,6 +229,11 @@ public class DatabaseManager {
             statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_queue_patient ON queue(patient_id)");
             statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_queue_appointment ON queue(appointment_id)");
             statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_queue_status_order ON queue(status, id)");
+            statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_queue_priority_order ON queue(status, priority DESC, added_at, id)");
+            statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_audit_created_at ON audit_log(created_at)");
+            statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_clinical_notes_patient ON clinical_notes(patient_id,created_at)");
+            statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_clinical_notes_diagnosis ON clinical_notes(diagnosis)");
+            statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_patient_phone ON patients(phone)");
 
         } catch (SQLException e) {
             throw new RuntimeException(
